@@ -7,7 +7,6 @@ train_outputs/
 eval_results/
 __pycache__/
 *egg-info/
-.vscode/
 .ipynb_checkpoints/
 wandb/
 data/
@@ -20,3 +19,4 @@ watcher_state.yaml
 trained_t2l/
 downloaded_lora/
 *.zip
+.cache/

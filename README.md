@@ -63,7 +63,7 @@ This script allows us to generate a LoRA based on a task description. Running fo
 ```bash
 # uv run generate_lora.py {T2l_DIRECTORY} {TASK_DESCRIPTION}
 # e.g.,
-uv run python scripts/generate_lora.py \
+uv run python generate_lora.py \
 trained_t2l/llama_8b_t2l \
 "This task challenges your problem-solving abilities through mathematical reasoning. You must carefully read each scenario and systematically work through the data to compute the final outcome."
 

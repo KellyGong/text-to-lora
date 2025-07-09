@@ -20,7 +20,7 @@ from evalplus.data import (
     get_mbpp_plus_hash,
     load_solutions,
 )
-from evalplus.eval import SUCCESS, estimate_pass_at_k, untrusted_check
+from evalplus.eval import _SUCCESS, estimate_pass_at_k, untrusted_check
 from evalplus.eval._special_oracle import MBPP_OUTPUT_NOT_NONE_TASKS
 from evalplus.evaluate import Result, get_groundtruth
 from termcolor import cprint
@@ -224,13 +224,13 @@ def evaluate(
         assert len(elements) == 1, f"Expected an element with task_id {key}, found {len(elements)}"
         element = elements[0]
 
-        bc = sum([r[0] == SUCCESS for r in res["base"]])
+        bc = sum([r[0] == _SUCCESS for r in res["base"]])
         base_correct.append(bc)
         element["base_correct"] = bc
         if res["plus"]:
             new_bc = sum(
                 [
-                    res["plus"][i][0] == res["base"][i][0] == SUCCESS
+                    res["plus"][i][0] == res["base"][i][0] == _SUCCESS
                     for i in range(len(res["plus"]))
                 ]
             )

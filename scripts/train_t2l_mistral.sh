@@ -1,4 +1,4 @@
-WANDB_MODE=disabled uv run python scripts/train_custom_sft.py \
+WANDB_MODE=disabled uv run python train_custom_sft.py \
     configs/hyper_lora_decontam_lol_tasks.yaml \
     --model_dir=mistralai/Mistral-7B-Instruct-v0.2 \
     --emb_model=Alibaba-NLP/gte-large-en-v1.5 \

@@ -30,8 +30,8 @@ def flatten(l):
 class Watcher:
     def __init__(self, patterns):
         self.patterns = patterns
-        self.files = self.get_files()
-        self.last_files = self.files
+        # self.files = self.get_files()
+        self.last_files = set()
 
     def get_files(self):
         return set(flatten(glob(pattern) for pattern in self.patterns))

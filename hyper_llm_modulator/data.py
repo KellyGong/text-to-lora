@@ -29,12 +29,12 @@ TRANSFORMED_DS_DIR = "data/transformed_datasets"
 EMBS_DIR = "data/embs"
 BENCHMARK_TASK_INFO = {
     "openbookqa": {"split": "validation[:500]"},
-    "hellaswag": {"split": "train[:500]"},
+    "hellaswag": {"split": "train[:500]", "trust_remote_code": True},
     "winogrande": {"name": "winogrande_debiased", "split": "train[:500]", "trust_remote_code": True},
     "boolq": {"split": "train[:500]"},
-    "piqa": {"split": "train[:500]"},
-    "arc_easy": {"name": "ARC-Easy", "split": "validation[:500]"},
-    "arc_challenge": {"name": "ARC-Challenge", "split": "validation[:500]"},
+    "piqa": {"split": "train[:500]", "trust_remote_code": True},
+    "arc_easy": {"name": "ARC-Easy", "split": "validation[:500]", "trust_remote_code": True},
+    "arc_challenge": {"name": "ARC-Challenge", "split": "validation[:500]", "trust_remote_code": True},
 }
 
 

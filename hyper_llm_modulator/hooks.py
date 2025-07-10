@@ -178,6 +178,44 @@ def add_lora_hooks(model, module_names, layer_indices, A, B, scaling, input_drop
         post_hook=lora_hook,
     )
 
+def add_svd_lora_hooks(model, emtmod, module_names, layer_indices, scaling, input_dropout, training):
+
+    assert len(module_names) == 1, "Only one module name is supported for SVD LoRA hooks"
+    assert len(layer_indices) == 1, "Only one layer index is supported for SVD LoRA hooks"
+
+    module_name = module_names[0]
+    layer_indice = layer_indices[0]
+
+    def svd_lora_hook(module, args, output):
+        if isinstance(output, tuple):
+            model_out = output[0]
+        else:
+            model_out = output
+
+        A = emtmod.SVD_offset["A"][module_name][layer_indice]
+        B = emtmod.SVD_offset["B"][module_name][layer_indice]
+        D = emtmod.SVD_offset["D"][module_name][layer_indice]
+        if A is None or B is None:
+            raise ValueError(f"LoRA matrices A or B for module {module_name} at layer {layer_indice} are None.")
+
+        x = args[0].to(A.dtype)
+
+        x = F.dropout(x, input_dropout, training)
+        delta_x = torch.matmul(torch.matmul(x, A) * D, B) * scaling
+
+        newoutput = model_out + delta_x.to(model_out.dtype)
+        if isinstance(output, tuple):
+            return (newoutput, *output[1:])
+        else:
+            return newoutput
+
+    return apply_custom_hooks_at_layers_(
+        model,
+        module_names,
+        layer_indices,
+        post_hook=svd_lora_hook,
+    )
+
 
 def add_vera_hooks(model, module_names, layer_indices, A, B, d, b, scaling, input_dropout):
 

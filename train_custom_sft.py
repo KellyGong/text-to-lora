@@ -15,6 +15,7 @@ from transformers import set_seed, get_scheduler
 from hyper_llm_modulator.configs import ArgumentParser, TrainingArguments
 from hyper_llm_modulator.data import create_dataloaders
 from hyper_llm_modulator.hyper_modulator import create_hypermod
+from hyper_llm_modulator.emt_learner import create_emt_learner
 from hyper_llm_modulator.sft_trainer import train
 from hyper_llm_modulator.utils import (
     get_layers,
@@ -49,6 +50,8 @@ def log_num_train_params(model):
 def main(args):
     args.train_ds_names = args.train_ds_names[: args.n_train_ds]
     args.use_hypernet = use_hypernet = "hyper" in args.exp_setup
+    args.use_emt = use_emt = "emt" in args.exp_setup
+    assert not (use_hypernet and use_emt), "Cannot use hypermod and emt at the same time"
     # get task metadata and save to the corresponding run folder
     train_metadata = get_metadata(args.train_ds_names, args.use_per_task_emb)
     val_metadata = get_metadata(args.eval_ds_info, args.use_per_task_emb)
@@ -130,7 +133,7 @@ def main(args):
     use_explicit_emb_model = False
     pooling_fn = None
 
-    hypermod = None
+    hypermod, emtmode = None, None
     if use_hypernet:
         task_emb_size = None
         if not args.use_one_hot_task_emb:
@@ -150,6 +153,10 @@ def main(args):
         hypermod = create_hypermod(args, peft_type, device, model, layer_indices, task_emb_size)
         logger.debug(f"Hypermod: {hypermod}")
         model.add_module("hypermod", hypermod)
+    elif use_emt:
+        emtmod = create_emt_learner(args, peft_type, device, model, layer_indices)
+        logger.debug(f"Using EMT learner: {emtmod}")
+        model.add_module("emt_learner", emtmod)
     elif "lora" in args.exp_setup:
         # for training vanilla LoRA
         model.set_adapter("default")
@@ -182,7 +189,7 @@ def main(args):
     ##############################################################################
     wd = args.weight_decay
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=wd)
-    model, hypermod, optimizer = accelerator.prepare(model, hypermod, optimizer)
+    model, hypermod, emtmode, optimizer = accelerator.prepare(model, hypermod, emtmod, optimizer)
     train_dataloader = accelerator.prepare(train_dataloader)
     for k, v in val_dataloaders.items():
         val_dataloaders[k] = accelerator.prepare(v)
@@ -209,6 +216,7 @@ def main(args):
         model,
         layer_indices,
         hypermod,
+        emtmod,
         train_dataloader,
         val_dataloaders,
         optimizer,

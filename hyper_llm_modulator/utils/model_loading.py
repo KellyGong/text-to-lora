@@ -18,6 +18,7 @@ def get_model_and_tokenizer(
     model_path,
     train,
     requires_grad,
+    use_emt=False,
     use_flash_attn=True,
     peft_config=None,
     model_kwargs=None,
@@ -29,6 +30,7 @@ def get_model_and_tokenizer(
         model_path,
         train,
         requires_grad,
+        use_emt,
         use_flash_attn,
         peft_config,
         model_kwargs,
@@ -76,6 +78,7 @@ def get_model(
     model_path,
     train,
     requires_grad,
+    use_emt=False,
     use_flash_attn=True,
     peft_config=None,
     model_kwargs=None,
@@ -97,9 +100,9 @@ def get_model(
         model_init_kwargs["use_cache"] = False
     logger.debug(f"Model init kwargs: {model_init_kwargs}")
     model = AutoModelForCausalLM.from_pretrained(**model_init_kwargs)
-    if peft_config is not None:
+    if peft_config is not None and not use_emt:
         model = PeftModel(model, peft_config)
-    model.train(train)
+        model.train(train)
     for param in model.parameters():
         param.requires_grad = requires_grad
     return model

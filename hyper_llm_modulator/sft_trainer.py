@@ -16,9 +16,10 @@ from transformers.modeling_utils import unwrap_model
 
 from hyper_llm_modulator.hooks import add_lora_hooks, remove_hook_handles_, add_svd_lora_hooks
 from hyper_llm_modulator.hyper_modulator import save_hypermod_checkpoint
+from hyper_llm_modulator.emt_learner import save_emt_checkpoint
 from hyper_llm_modulator.utils import save_lora_from_peft_model, log_scalar
 
-from hyper_llm_modulator.utils.eval_hypermod import eval_hypermod_checkpoint, eval_lora
+from hyper_llm_modulator.utils.eval_hypermod import eval_hypermod_checkpoint, eval_lora, eval_emt
 
 logger = logging.getLogger()
 
@@ -124,9 +125,10 @@ def get_loss_batch(
     out = dict()
     bs = batch["input_ids"].shape[0]
     hook_handles = []
+    device = model.device
+    out["generated_w_l2_loss"] = torch.zeros(1, device=device)
 
     if use_hypernet:
-        out["generated_w_l2_loss"] = torch.zeros(1, device=model.device)
         # TODO: allow online embed of hypernetwork's input
         # to support hyperdecoders style training
         # (using the input prompt as the task description)
@@ -148,7 +150,7 @@ def get_loss_batch(
             for A, B in factorized_delta_w.values():
                 out["generated_w_l2_loss"] += ((A**2).mean() + (B**2).mean()) * l2_reg_generated_w
     
-    outputs = model(**{k: batch[k] for k in MODEL_INPUT_KEYS})
+    outputs = model(**{k: batch[k].to(device) for k in MODEL_INPUT_KEYS})
     out["sft_loss"] = compute_loss(
         batch["labels"],
         outputs.logits,
@@ -176,7 +178,7 @@ def train(
     args,
     save_dir,
     inp_dropout,
-    accelerator,
+    # accelerator,
     model,
     layer_indices,
     hypermod,
@@ -190,7 +192,7 @@ def train(
     model.train()
     if args.use_hypernet:
         hypermod.train()
-        wandb.watch(hypermod, log="all", log_freq=1000)
+        # wandb.watch(hypermod, log="all", log_freq=1000)
 
     if args.use_emt:
         emtmod.train()
@@ -231,10 +233,12 @@ def train(
 
     # validate before training
     if args.also_val_on_train:
-        val_info = validate(model, hypermod, {"train": train_dataloader}, _get_loss_batch, curstep=0)
-    val_info = validate(model, hypermod, val_dataloaders, _get_loss_batch, curstep=0)
+        val_info = validate(model, hypermod, emtmod, {"train": train_dataloader}, _get_loss_batch, curstep=0)
+    val_info = validate(model, hypermod, emtmod, val_dataloaders, _get_loss_batch, curstep=0)
     if args.use_hypernet:
         cp_path = save_hypermod_checkpoint(save_dir, hypermod, curstep=0)
+    elif args.use_emt:
+        cp_path = save_emt_checkpoint(save_dir, emtmod, curstep=0)
     elif "mt_lora" in args.exp_setup:
         lora_dir = save_lora_checkpoint(save_dir, model, args.model_dir, curstep=0)
     elif "val/seen" in val_info:
@@ -251,19 +255,20 @@ def train(
             ##########################################
             # Training
             ##########################################
-            with accelerator.accumulate(model), accelerator.autocast():
-                batch_loss = _get_loss_batch_train(batch)
-                loss = batch_loss["sft_loss"] + batch_loss["generated_w_l2_loss"]
-                avg_losses["train/sft_loss"].append(batch_loss["sft_loss"].item())
-                avg_losses["train/generated_w_l2_loss"].append(batch_loss["generated_w_l2_loss"].item())
-                avg_losses["train/total_loss"].append(loss.item())
+            # with accelerator.accumulate(model), accelerator.autocast():
+            batch_loss = _get_loss_batch_train(batch)
+            loss = batch_loss["sft_loss"] + batch_loss["generated_w_l2_loss"]
+            avg_losses["train/sft_loss"].append(batch_loss["sft_loss"].item())
+            avg_losses["train/generated_w_l2_loss"].append(batch_loss["generated_w_l2_loss"].item())
+            avg_losses["train/total_loss"].append(loss.item())
 
-                optimizer.zero_grad()
-                accelerator.backward(loss)
-                if accelerator.sync_gradients:
-                    grad_norm = accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                optimizer.step()
-                scheduler.step()
+            optimizer.zero_grad()
+            # accelerator.backward(loss)
+            loss.backward()
+            # if accelerator.sync_gradients:
+            #     grad_norm = accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            optimizer.step()
+            scheduler.step()
 
             pbar.update(1)
             pbar.set_description(f"loss: {loss.item():.4f}")
@@ -278,12 +283,13 @@ def train(
 
             if (curstep % args.val_freq == 0) or (curstep == num_training_steps):
                 if args.also_val_on_train:
-                    val_info = validate(model, hypermod, {"train": train_dataloader}, _get_loss_batch, curstep)
+                    val_info = validate(model, hypermod, emtmod, {"train": train_dataloader}, _get_loss_batch, curstep)
 
-                val_info = validate(model, hypermod, val_dataloaders, _get_loss_batch, curstep)
+                val_info = validate(model, hypermod, emtmod, val_dataloaders, _get_loss_batch, curstep)
                 if args.use_hypernet:
                     cp_path = save_hypermod_checkpoint(save_dir, hypermod, curstep)
-
+                elif args.use_emt:
+                    cp_path = save_emt_checkpoint(save_dir, emtmod, curstep)
                 elif "mt_lora" in args.exp_setup:
                     lora_dir = save_lora_checkpoint(save_dir, model, args.model_dir, curstep)
                 elif "val/seen" in val_info:
@@ -307,6 +313,14 @@ def train(
         if not os.path.isfile(best_cp_path):
             shutil.copy(last_cp_path, f"{save_dir}/hypermod.pt")
         eval_hypermod_checkpoint(best_cp_path, accelerator.device, curstep, full_eval=True)
+    
+    elif args.use_emt:
+        last_cp_path = save_emt_checkpoint(save_dir, emtmod, curstep)
+        best_cp_path = f"{save_dir}/emt.pt"
+        if not os.path.isfile(best_cp_path):
+            shutil.copy(last_cp_path, f"{save_dir}/emt.pt")
+        eval_hypermod_checkpoint(best_cp_path, accelerator.device, curstep, full_eval=True)
+
     elif "mt_lora" in args.exp_setup:
         lora_dir = save_lora_checkpoint(save_dir, model, args.model_dir, curstep)
         if not os.path.isfile(f"{save_dir}/adapter_model.safetensors"):
@@ -327,16 +341,16 @@ def train(
         for cp_dir in cp_dirs[:-1]:
             shutil.rmtree(cp_dir)
 
-    wandb.unwatch(hypermod)
-    accelerator.end_training()
+    # wandb.unwatch(hypermod)
+    # accelerator.end_training()
     neftune_hook_handle.remove()
     model.eval()
     if args.use_hypernet:
         hypermod.eval()
 
 
-def validate(model, hypermod, val_dataloaders, _get_loss_batch, curstep):
-    with torch.no_grad(), evaluating(model, hypermod):
+def validate(model, hypermod, emtmod, val_dataloaders, _get_loss_batch, curstep):
+    with torch.no_grad(), evaluating(model, hypermod, emtmod):
         out = dict()
         for val_dataloader_name, val_dataloader in val_dataloaders.items():
             if val_dataloader is None:

@@ -20,6 +20,7 @@ from hyper_llm_modulator.utils.model_loading import get_tokenizer
 from hyper_llm_modulator.utils.preprocessing import preprocess_result
 from hyper_llm_modulator.utils.utils import embed_texts
 from hyper_llm_modulator.vllm_eval import eval
+from hyper_llm_modulator.emt_learner import load_emt_checkpoint
 
 logger = logging.getLogger()
 
@@ -277,6 +278,73 @@ def eval_lora(args, lora_dir, curstep, full_eval=False, use_icl=False):
     return avg_perf
 
 
+def swap_model_with_emt(args, model, emtmod, device='cuda'):
+    """
+    Swap the model with the EMT learner.
+    This is a workaround to use the EMT learner in place of the model.
+    """
+    layer_indices = torch.tensor(
+        range(len(get_layers(model))), dtype=torch.long, device=device
+    )
+
+    target_modules = args.target_modules
+
+    model = model.model
+
+    for name, module in model.named_modules():
+        if name in target_modules:
+            # Replace the module with the EMT learner
+            emt_layer = emtmod.get_emt_layer(name, layer_indices)
+            setattr(model, name, emt_layer)
+            logger.info(f"Replaced {name} with EMT layer.")
+        else:
+            logger.info(f"Keeping {name} as is.")
+
+
+def eval_emt(args, emt_dir, curstep, full_eval=False, use_icl=False):
+    save_dicts = None
+    eval_ds_info = deepcopy(args.eval_ds_info)
+    chat_template = get_tokenizer(args.model_dir).chat_template
+    all_lora_dirs = None
+
+    args_load, emtmod, model, tokenizer = load_emt_checkpoint(emt_dir, 'cuda')
+
+    swap_model_with_emt(args_load, model, emtmod)
+
+    if not full_eval:
+        eval_ds_info = {k: v for k, v in eval_ds_info.items() if k in BENCHMARK_TASK_INFO}
+        for k in BENCHMARK_TASK_INFO:
+            eval_ds_info[k]["ds_kwargs"] = BENCHMARK_TASK_INFO[k]
+
+    for eval_ds in eval_ds_info:
+        ds_kwargs = eval_ds_info[eval_ds]["ds_kwargs"] if "ds_kwargs" in eval_ds_info[eval_ds] else None
+        do_eval_task_emt(
+            args.model_dir,
+            chat_template,
+            emt_dir,
+            all_lora_dirs,
+            eval_ds,
+            save_dicts,
+            ds_kwargs,
+            use_icl,
+        )
+
+    perf_files = glob(f"{emt_dir}/eval_results/*_eval_results.json")
+    perf_files = [f for f in perf_files if not f.startswith("lol")]
+    avg_perf = 0
+    for perf_file in perf_files:
+        with open(perf_file, "r") as f:
+            perf_dict = json.load(f)
+        avg_perf += perf_dict[list(perf_dict.keys())[0]][0]["results"]["acc"] / len(perf_files)
+    df = pd.DataFrame.from_dict(dict(model_name=["mt_lora"], split=["test"], benchmark_avg=[avg_perf]))
+    df.to_csv(f"{emt_dir}/eval_results/combined_results.csv", index=False)
+    if full_eval:
+        log_scalar(f"test/benchmark/acc/avg", avg_perf, curstep)
+    else:
+        log_scalar(f"val/benchmark/acc/avg", avg_perf, curstep)
+    return avg_perf
+
+
 @torch.no_grad()
 def do_eval_task(
     model_dir: str,
@@ -302,6 +370,48 @@ def do_eval_task(
         ds_kwargs=ds_kwargs,
         use_icl=use_icl,
     )
+
+    for (lora_dir, res), save_dict in zip(full_results.items(), save_dicts):
+        sampled_res_details = res.sample_details[:10]
+        results[eval_dataset].append(
+            dict(
+                results=preprocess_result(res, perf_keys),
+                sampled_res_details=sampled_res_details,
+                **save_dict,
+            )
+        )
+
+    torch.cuda.empty_cache()
+    gc.collect()
+    result_path = f"{save_dir}/eval_results/{eval_dataset}_eval_results.json"
+    save_json(results, result_path)
+    return results
+
+@torch.no_grad()
+def do_eval_task_emt(
+    model_dir: str,
+    chat_template: str | None,
+    save_dir: str,
+    eval_dataset: str,
+    save_dicts: list[dict] = None,
+    ds_kwargs: dict = None,
+    use_icl: bool = False,
+):
+    perf_keys = ["acc", "mbpp_base_pass@1", "humaneval_base_pass@1", "rouge1_fmeasure", "rougeL_fmeasure"]
+    os.makedirs(f"{save_dir}/eval_results", exist_ok=True)
+    results = {eval_dataset: []}
+    full_results = eval(
+        model_dir,
+        None, # No LoRA directories for EMT
+        eval_dataset,
+        chat_template,
+        gpu_memory_utilization=0.6,
+        ds_kwargs=ds_kwargs,
+        use_icl=use_icl,
+    )
+
+    if save_dicts is None:
+        save_dicts = [dict() for _ in full_results]
 
     for (lora_dir, res), save_dict in zip(full_results.items(), save_dicts):
         sampled_res_details = res.sample_details[:10]

@@ -30,20 +30,36 @@ from hyper_llm_modulator.utils import (
     get_std_lora,
 )
 
-from hyper_llm_modulator.hyper_modulator import get_in_out_features
+
+
+def get_module_names(model, target_modules, layer_indices):
+    module_names = {
+        target_module: [[] for _ in range(len(layer_indices))]
+        for target_module in target_modules
+    }
+    for k in model.state_dict():
+        if not k.startswith("model.layers."):
+            continue
+        layer_idx = int(k.split("model.layers.")[-1].split(".")[0])
+        if layer_idx in layer_indices:
+            for target_module in target_modules:
+                if target_module in k:
+                    module_names[target_module][layer_idx].append(k)
+                    break
+    return module_names
 
 
 def create_emt_learner(
-    args, peft_type, device, model, layer_indices
+    args, peft_config, device, model, layer_indices
 ) -> nn.Module:
     """
     Create an EMT learner module for the given model and PEFT configuration.
     """
 
-    module_names = get_lora_module_names(model, args.target_modules, layer_indices)
+    module_names = get_module_names(model, args.target_modules, layer_indices)
 
     emt_learner = EMTLearner(model=model,
-                             output_space=peft_type,
+                             peft_config=peft_config,
                              module_names=module_names,
                              training_task=args.training_task
                              ).to(device)
@@ -82,6 +98,26 @@ def zero_lora_param_dict(target_modules, n_layers, rank, in_features, out_featur
     )
 
 
+def get_in_out_features(
+    model: PeftModel,
+    target_modules: list[str],
+) -> tuple[dict[str, int], dict[str, int]]:
+    in_features = dict()
+    out_features = dict()
+    for k, module in model.named_modules():
+        for target_module in target_modules:
+            if target_module in k:        
+                if target_module not in in_features:
+                    in_features[target_module] = module.in_features
+                    out_features[target_module] = module.out_features
+                else:
+                    # assumes each module has the same input and output features
+                    assert in_features[target_module] == module.in_features
+                    assert out_features[target_module] == module.out_features
+
+    return in_features, out_features
+
+
 class EMTLearner(nn.Module):
     """
     EMT Learner module for training with an efficient multi-task lora finetuning.
@@ -89,22 +125,20 @@ class EMTLearner(nn.Module):
     def __init__(
         self,
         model: PeftModel,
-        output_space: str,
+        peft_config: PeftConfig,
         module_names: list[str],
         training_task: Literal["sft"] = "sft",
         dtype: torch.dtype = torch.float32
     ):
-        assert output_space == "lora", f"Invalid output space: {output_space}"
 
         super().__init__()
         self.model_config = model_config = model.config
-        self.peft_config = peft_config = model.peft_config["default"]
+        self.peft_config = peft_config
         self.module_names = module_names
         self.scaling = peft_config.lora_alpha / peft_config.r
         self.target_modules = peft_config.target_modules
         self.training_task = training_task
 
-        self.output_space = output_space
         self.max_num_layers = model_config.num_hidden_layers
         self.device = device = model.device
         self.dtype = dtype
@@ -113,7 +147,7 @@ class EMTLearner(nn.Module):
             module_name: i for i, module_name in enumerate(module_names)
         }
 
-        self.in_features, self.out_features = get_in_out_features(model, peft_config)
+        self.in_features, self.out_features = get_in_out_features(model, self.target_modules)
 
         self.SVD_offset = zero_lora_param_dict(
             self.target_modules,
@@ -158,7 +192,7 @@ def load_emt_checkpoint(checkpoint_path, device):
         PeftConfig.from_json_file(f"{base_dir}/adapter_config.json")
     )
     peft_type = peft_config.peft_type.lower()
-    state_dict = torch.load(checkpoint_path, map_location=device)
+    state_dict = torch.load(os.path.join(checkpoint_path, "emt.pt"), map_location=device)
 
     model, tokenizer = get_model_and_tokenizer(
         args.model_dir,
@@ -178,7 +212,7 @@ def load_emt_checkpoint(checkpoint_path, device):
     )
 
     info = emt_learner.load_state_dict(state_dict, strict=False)
-    print(f"Loaded hypermod state dict: {info}")
+    print(f"Loaded emt module state dict: {info}")
     emt_learner.eval().to(device)
     return (
         args,

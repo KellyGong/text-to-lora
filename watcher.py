@@ -15,11 +15,12 @@ import pandas as pd
 import wandb
 import yaml
 
-from hyper_llm_modulator.sft_trainer import eval_hypermod_checkpoint, eval_lora
+from hyper_llm_modulator.sft_trainer import eval_hypermod_checkpoint, eval_lora, eval_emt
 from hyper_llm_modulator.utils import save_yaml
 
 HYPERLORA_CP_PATTERN = "train_outputs/sft/hyper_lora/*/checkpoints/it_*/hypermod.pt"
 MTLORA_CP_PATTERN = "train_outputs/sft/mt_lora/*/checkpoints/it_*/adapter_model.safetensors"
+EMTLORA_CP_PATTERN = "train_outputs/sft/emt_lora/*/checkpoints/it_*/emt.pt"
 EARLYSTOP_PATIENCE = 50
 
 
@@ -84,6 +85,8 @@ def save_best_checkpoint(adapter_dir, best_checkpoint):
         shutil.copy(f"{best_checkpoint}/hypermod.pt", f"{adapter_dir}/hypermod.pt")
     elif "mt_lora" in best_checkpoint:
         shutil.copy(f"{best_checkpoint}/adapter_model.safetensors", f"{adapter_dir}/adapter_model.safetensors")
+    elif "emt" in best_checkpoint:
+        shutil.copy(f"{best_checkpoint}/emt.pt", f"{adapter_dir}/emt.pt")
 
 
 def check_earlystop(adapter_dir, checkpoints, best_df_idx, best_checkpoint):
@@ -100,11 +103,10 @@ def check_earlystop(adapter_dir, checkpoints, best_df_idx, best_checkpoint):
 if __name__ == "__main__":
     os.environ["WANDB_PROJECT"] = "hypermod_sft"
     wandb_dir = f"{os.environ['HOME']}/.wandb/logs/hypermod_sft/"
-    watcher = Watcher([HYPERLORA_CP_PATTERN, MTLORA_CP_PATTERN])
+    watcher = Watcher([HYPERLORA_CP_PATTERN, MTLORA_CP_PATTERN, EMTLORA_CP_PATTERN])
     watcher.load_state()
     print("Watching for new files...")
     while True:
-        time.sleep(10)
         new_files = watcher.watch()
         for file in new_files:
             if "checkpoints" not in file:
@@ -134,7 +136,11 @@ if __name__ == "__main__":
             elif "adapter_model.safetensors" in file:
                 lora_dir = os.path.dirname(file)
                 eval_lora(args, lora_dir, curstep, full_eval=False)
-
+            
+            elif "emt.pt" in file:
+                emt_dir = os.path.dirname(file)
+                eval_emt(args, emt_dir, curstep, full_eval=False)
+            
             # get the best checkpoint
             checkpoints = get_sorted_checkpoints(adapter_dir)
             best_df_idx, best_checkpoint = get_best_checkpoint(checkpoints)
@@ -144,5 +150,5 @@ if __name__ == "__main__":
             check_earlystop(adapter_dir, checkpoints, best_df_idx, best_checkpoint)
             # close wandb run
             wandb.finish()
-
+        time.sleep(10)
         watcher.save_state()

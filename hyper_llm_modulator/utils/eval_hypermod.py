@@ -11,6 +11,8 @@ import torch
 import pandas as pd
 import wandb
 
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
+
 from hyper_llm_modulator.hyper_modulator import load_hypermod_checkpoint, save_lora
 from hyper_llm_modulator.res_aggregator import aggregrate_results_and_save_to_file
 from hyper_llm_modulator.utils import generate_simplex_points, get_layers, get_metadata, save_json, log_scalar
@@ -19,7 +21,7 @@ from hyper_llm_modulator.utils.lora_formatting import convert_qkv_gate_up_lora_t
 from hyper_llm_modulator.utils.model_loading import get_tokenizer
 from hyper_llm_modulator.utils.preprocessing import preprocess_result
 from hyper_llm_modulator.utils.utils import embed_texts
-from hyper_llm_modulator.vllm_eval import eval
+from hyper_llm_modulator.vllm_eval import eval, eval_hf_model
 from hyper_llm_modulator.emt_learner import load_emt_checkpoint
 
 logger = logging.getLogger()
@@ -278,38 +280,79 @@ def eval_lora(args, lora_dir, curstep, full_eval=False, use_icl=False):
     return avg_perf
 
 
-def swap_model_with_emt(args, model, emtmod, device='cuda'):
+def wrap_model_with_emt(args, model, emtmod, device='cuda'):
     """
-    Swap the model with the EMT learner.
+    wrap the model with the EMT learner.
     This is a workaround to use the EMT learner in place of the model.
     """
-    layer_indices = torch.tensor(
-        range(len(get_layers(model))), dtype=torch.long, device=device
-    )
+
+    scaling = emtmod.scaling
+    
+    class SVDLoRAWrapper(torch.nn.Module):
+        def __init__(self, layer, A, B, D):
+            super().__init__()
+            self.layer = layer
+            self.scaling = torch.nn.Parameter(torch.tensor(scaling, dtype=A.dtype), requires_grad=False)
+            # save A, B, D to parameters
+            self.A = torch.nn.Parameter(A, requires_grad=False)
+            self.B = torch.nn.Parameter(B, requires_grad=False)
+            self.D = torch.nn.Parameter(D, requires_grad=False)
+        
+        def forward(self, x):
+            # Apply the SVD weights to the input
+            out_x = self.layer(x)
+            delta_x = torch.matmul(torch.matmul(x.to(self.A.dtype), self.A) * self.D, self.B) * self.scaling
+            return (out_x + delta_x).to(x.dtype)
 
     target_modules = args.target_modules
 
-    model = model.model
-
     for name, module in model.named_modules():
-        if name in target_modules:
-            # Replace the module with the EMT learner
-            emt_layer = emtmod.get_emt_layer(name, layer_indices)
-            setattr(model, name, emt_layer)
-            logger.info(f"Replaced {name} with EMT layer.")
-        else:
-            logger.info(f"Keeping {name} as is.")
+        if not isinstance(module, torch.nn.Linear):
+            continue
+        
+        for target_module in target_modules:
+            if target_module in name:
+                layer_id = int(name.split("model.layers.")[-1].split(".")[0])
+                A, B, D = emtmod.get_module_weights(target_module, layer_id)
 
+                wrapper_layer = SVDLoRAWrapper(module, A, B, D)
+                
+                parts = name.split('.')
+                parent = model
+                for part in parts[:-1]:
+                    parent = getattr(parent, part)
+                
+                setattr(parent, parts[-1], wrapper_layer)
+                logger.info(f"Replaced {name} with SVD LoRA wrapper.")
+                break
 
 def eval_emt(args, emt_dir, curstep, full_eval=False, use_icl=False):
     save_dicts = None
     eval_ds_info = deepcopy(args.eval_ds_info)
-    chat_template = get_tokenizer(args.model_dir).chat_template
-    all_lora_dirs = None
+    tokenizer = get_tokenizer(args.model_dir)
+    chat_template = tokenizer.chat_template
 
     args_load, emtmod, model, tokenizer = load_emt_checkpoint(emt_dir, 'cuda')
 
-    swap_model_with_emt(args_load, model, emtmod)
+    wrap_model_with_emt(args_load, model, emtmod)
+
+    # base_dir = os.path.dirname(emt_dir)
+    # if "checkpoint" in base_dir:
+    #     base_dir = base_dir.split("checkpoint")[0]
+
+    # wrap_model_dir = os.path.join(base_dir, "model_wrap")
+
+    # model.save_pretrained(wrap_model_dir, safe_serialization=True, save_config=True)
+    
+    # tokenizer.save_pretrained(wrap_model_dir)
+    
+    # load_model = AutoModelForCausalLM.from_pretrained(
+    #     wrap_model_dir,
+    #     device_map="auto",
+    #     torch_dtype=torch.bfloat16,
+    #     trust_remote_code=True,
+    # )
+    # torch.save(model.state_dict(), wrap_model_dir)
 
     if not full_eval:
         eval_ds_info = {k: v for k, v in eval_ds_info.items() if k in BENCHMARK_TASK_INFO}
@@ -319,10 +362,10 @@ def eval_emt(args, emt_dir, curstep, full_eval=False, use_icl=False):
     for eval_ds in eval_ds_info:
         ds_kwargs = eval_ds_info[eval_ds]["ds_kwargs"] if "ds_kwargs" in eval_ds_info[eval_ds] else None
         do_eval_task_emt(
-            args.model_dir,
+            model,
+            tokenizer,
             chat_template,
             emt_dir,
-            all_lora_dirs,
             eval_ds,
             save_dicts,
             ds_kwargs,
@@ -387,9 +430,11 @@ def do_eval_task(
     save_json(results, result_path)
     return results
 
+
 @torch.no_grad()
 def do_eval_task_emt(
-    model_dir: str,
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
     chat_template: str | None,
     save_dir: str,
     eval_dataset: str,
@@ -400,9 +445,9 @@ def do_eval_task_emt(
     perf_keys = ["acc", "mbpp_base_pass@1", "humaneval_base_pass@1", "rouge1_fmeasure", "rougeL_fmeasure"]
     os.makedirs(f"{save_dir}/eval_results", exist_ok=True)
     results = {eval_dataset: []}
-    full_results = eval(
-        model_dir,
-        None, # No LoRA directories for EMT
+    full_results = eval_hf_model(
+        model,
+        tokenizer,
         eval_dataset,
         chat_template,
         gpu_memory_utilization=0.6,

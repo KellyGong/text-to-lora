@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
+from tqdm import tqdm
 
 from fishfarm.models import GenerationRequest, Message, Model
 from fishfarm.tasks.base import Task, TaskResult
+from transformers import PreTrainedModel, PreTrainedTokenizer
 
 
 def get_accuracy(generated_text: str, target_text: str) -> int:
@@ -116,6 +118,50 @@ def get_binary_accuracy_flex(generated_text, target_text):
     return int(generated_prediction == target_prediction)
 
 
+def generate_from_hf_batch(
+    requests: list[GenerationRequest],
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    batch_size: int = 8,
+    device: str = 'cuda',
+    **generate_kwargs
+) -> list[str]:
+    # transform the request to prompts text
+    prompts = [
+        "\n".join([f"{msg.role}: {msg.content}" for msg in req.messages]) + "\nassistant: "
+        for req in requests
+    ]
+    
+    responses = []
+    for i in tqdm(range(0, len(prompts), batch_size), desc="Generating"):
+        batch_prompts = prompts[i:i + batch_size]
+        
+        inputs = tokenizer(
+            batch_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=2048
+        ).to(device)
+        
+        outputs = model.generate(
+            **inputs,
+            pad_token_id=tokenizer.pad_token_id,
+            max_new_tokens=2**9,
+            temperature=0,
+            top_p=1,
+            **generate_kwargs
+        )
+        
+        for j in range(len(outputs)):
+            input_length = inputs.input_ids[j].shape[0]
+            generated_ids = outputs[j][input_length:]
+            response = tokenizer.decode(generated_ids, skip_special_tokens=True)
+            responses.append(response)
+    
+    return responses
+
+
 @dataclass
 class QASample:
     question: str
@@ -137,7 +183,7 @@ class QATask(Task):
     def num_samples(self) -> int:
         return len(self.samples)
 
-    def evaluate(self, model: Model, sample_ids: Optional[Sequence[int]] = None) -> TaskResult:
+    def evaluate(self, model: Model, tokenizer: PreTrainedTokenizer = None, sample_ids: Optional[Sequence[int]] = None) -> TaskResult:
         if sample_ids is None:
             sample_ids = range(len(self.samples))
         samples = [self.samples[sample_id] for sample_id in sample_ids]
@@ -147,8 +193,17 @@ class QATask(Task):
             messages.append(Message(role="user", content=sample.question))
             requests.append(GenerationRequest(messages=messages))
 
+        if isinstance(model, PreTrainedModel):
+            results = generate_from_hf_batch(requests=requests,
+                                             model=model,
+                                             tokenizer=tokenizer)
+        
+        else:
+            # model is a vllm model
+            results = model.generate(requests)
+
         sample_details = []
-        for sample, result in zip(samples, model.generate(requests)):
+        for sample, result in zip(samples, results):
             output = result.generation
             is_correct = self.eval_fn(output, sample.answer)
             details = dict(problem=sample.question, output=output, answer=sample.answer, is_correct=is_correct)

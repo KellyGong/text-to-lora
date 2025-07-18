@@ -178,7 +178,7 @@ def train(
     args,
     save_dir,
     inp_dropout,
-    # accelerator,
+    accelerator,
     model,
     layer_indices,
     hypermod,
@@ -255,18 +255,18 @@ def train(
             ##########################################
             # Training
             ##########################################
-            # with accelerator.accumulate(model), accelerator.autocast():
-            batch_loss = _get_loss_batch_train(batch)
-            loss = batch_loss["sft_loss"] + batch_loss["generated_w_l2_loss"]
-            avg_losses["train/sft_loss"].append(batch_loss["sft_loss"].item())
-            avg_losses["train/generated_w_l2_loss"].append(batch_loss["generated_w_l2_loss"].item())
-            avg_losses["train/total_loss"].append(loss.item())
+            with accelerator.accumulate(model), accelerator.autocast():
+                batch_loss = _get_loss_batch_train(batch)
+                loss = batch_loss["sft_loss"] + batch_loss["generated_w_l2_loss"]
+                avg_losses["train/sft_loss"].append(batch_loss["sft_loss"].item())
+                avg_losses["train/generated_w_l2_loss"].append(batch_loss["generated_w_l2_loss"].item())
+                avg_losses["train/total_loss"].append(loss.item())
 
             optimizer.zero_grad()
-            # accelerator.backward(loss)
-            loss.backward()
-            # if accelerator.sync_gradients:
-            #     grad_norm = accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            accelerator.backward(loss)
+            # loss.backward()
+            if accelerator.sync_gradients:
+                grad_norm = accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
             optimizer.step()
             scheduler.step()
 
@@ -342,7 +342,7 @@ def train(
             shutil.rmtree(cp_dir)
 
     # wandb.unwatch(hypermod)
-    # accelerator.end_training()
+    accelerator.end_training()
     neftune_hook_handle.remove()
     model.eval()
     if args.use_hypernet:

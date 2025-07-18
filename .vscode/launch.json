@@ -63,7 +63,8 @@
                 "--l2_reg_generated_w=1e-3",
                 "--label_smoothing=0.1",
                 "--neftune_noise_alpha=5",
-                "--weight_decay=1e-2"
+                "--weight_decay=1e-2",
+                "--val_batch_size=8"
             ],
             "env": {
                 "WANDB_MODE": "disabled",
@@ -78,7 +79,7 @@
             "console": "integratedTerminal",
             "env": {
                 "WANDB_MODE": "disabled",
-                "CUDA_VISIBLE_DEVICES": "0"
+                "CUDA_VISIBLE_DEVICES": "2"
             }
         }
     ]

@@ -157,6 +157,15 @@ class EMTLearner(nn.Module):
             self.out_features
         )
     
+    def get_module_weights(self, module_name: str, layer_index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Get the weights for the specified module and layer index.
+        """
+        A = self.SVD_offset["A"][module_name][layer_index]
+        B = self.SVD_offset["B"][module_name][layer_index]
+        D = self.SVD_offset["D"][module_name][layer_index]
+        return A, B, D
+    
     # def get_delta_weights(
     #     self,
     #     layer_indices: torch.Tensor,
@@ -168,9 +177,6 @@ class EMTLearner(nn.Module):
     #     Get the delta weights for the specified layer type and indices.
     #     """
     #     if factorized is None:
-
-        
-    
 
 
 def save_emt_checkpoint(save_dir, emt_learner, curstep):
@@ -191,8 +197,8 @@ def load_emt_checkpoint(checkpoint_path, device):
     peft_config = get_peft_config(
         PeftConfig.from_json_file(f"{base_dir}/adapter_config.json")
     )
-    peft_type = peft_config.peft_type.lower()
-    state_dict = torch.load(os.path.join(checkpoint_path, "emt.pt"), map_location=device)
+
+    state_dict = torch.load(os.path.join(checkpoint_path, "emt.pt"), map_location=device, weights_only=True)
 
     model, tokenizer = get_model_and_tokenizer(
         args.model_dir,
@@ -201,6 +207,7 @@ def load_emt_checkpoint(checkpoint_path, device):
         peft_config=peft_config,
         model_kwargs={"output_hidden_states": True, "output_attentions": False},
         device=device,
+        use_emt=True
     )
     # train to output delta_w for all layers
     layer_indices = torch.tensor(
@@ -208,7 +215,7 @@ def load_emt_checkpoint(checkpoint_path, device):
     )
 
     emt_learner = create_emt_learner(
-        args, peft_type, device, model, layer_indices
+        args, peft_config, device, model, layer_indices
     )
 
     info = emt_learner.load_state_dict(state_dict, strict=False)

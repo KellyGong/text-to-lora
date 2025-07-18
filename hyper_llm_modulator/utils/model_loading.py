@@ -71,6 +71,10 @@ def get_tokenizer(model_path, tokenizer_kwargs=None, peft_config=None, train=Fal
 
     tokenizer.add_eos_token = False
     tokenizer.truncation_side = "left"
+
+    # DEBUG: set max length for debugging purposes
+    # tokenizer.model_max_length = 128
+
     return tokenizer
 
 
@@ -95,6 +99,9 @@ def get_model(
         model_init_kwargs.update(model_kwargs)
     if use_flash_attn:
         model_init_kwargs["attn_implementation"] = "flash_attention_2"
+    if 'gemma' in model_path:
+        # Gemma models have a different attention implementation
+        model_init_kwargs["attn_implementation"] = "eager"
     if train:
         # for training disable cache
         model_init_kwargs["use_cache"] = False

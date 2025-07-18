@@ -112,7 +112,6 @@ if __name__ == "__main__":
             if "checkpoints" not in file:
                 continue
             # workaround to prevent loading incomplete files
-            time.sleep(10)
             if not os.path.exists(file):
                 # cp is delete before we can read it
                 continue
@@ -150,5 +149,6 @@ if __name__ == "__main__":
             check_earlystop(adapter_dir, checkpoints, best_df_idx, best_checkpoint)
             # close wandb run
             wandb.finish()
+            time.sleep(10)
         time.sleep(10)
         watcher.save_state()

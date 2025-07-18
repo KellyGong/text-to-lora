@@ -7,8 +7,8 @@ import subprocess
 import time
 
 import torch
-# from accelerate import Accelerator
-# from accelerate.utils import GradientAccumulationPlugin
+from accelerate import Accelerator
+from accelerate.utils import GradientAccumulationPlugin
 from datasets import disable_caching
 from transformers import set_seed, get_scheduler
 
@@ -78,30 +78,30 @@ def main(args):
         )
 
     # setup accelerator
-    # plugin = GradientAccumulationPlugin(num_steps=args.grad_accum_steps, sync_with_dataloader=False)
-    # accelerator = Accelerator(
-    #     mixed_precision="bf16",
-    #     gradient_accumulation_plugin=plugin,
-    #     split_batches=True,  # True means do not multiply batch size by the number of gpus used
-    #     log_with="wandb",
-    # )
+    plugin = GradientAccumulationPlugin(num_steps=args.grad_accum_steps, sync_with_dataloader=False)
+    accelerator = Accelerator(
+        mixed_precision="bf16",
+        gradient_accumulation_plugin=plugin,
+        split_batches=True,  # True means do not multiply batch size by the number of gpus used
+        log_with="wandb",
+    )
 
     def clear_mem():
-        # nonlocal accelerator
+        nonlocal accelerator
         torch.cuda.empty_cache()
-        # accelerator.free_memory()
+        accelerator.free_memory()
         gc.collect()
 
     wandb_dir = f"{os.environ['HOME']}/.wandb/logs/{os.environ['WANDB_PROJECT']}/"
     os.makedirs(wandb_dir, exist_ok=True)
-    # accelerator.init_trackers(
-    #     os.getenv("WANDB_PROJECT"),
-    #     config=vars(args),
-    #     init_kwargs=dict(wandb={"group": args.run_name, "name": args.run_name, "dir": wandb_dir, "notes": args.notes}),
-    # )
-    # device = accelerator.device
+    accelerator.init_trackers(
+        os.getenv("WANDB_PROJECT"),
+        config=vars(args),
+        init_kwargs=dict(wandb={"group": args.run_name, "name": args.run_name, "dir": wandb_dir, "notes": args.notes}),
+    )
+    device = accelerator.device
 
-    device = 'cuda'
+    # device = 'cuda'
 
     ##############################################################################
     # Model setup
@@ -192,10 +192,10 @@ def main(args):
     ##############################################################################
     wd = args.weight_decay
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=wd)
-    # model, hypermod, emtmod, optimizer = accelerator.prepare(model, hypermod, emtmod, optimizer)
-    # train_dataloader = accelerator.prepare(train_dataloader)
-    # for k, v in val_dataloaders.items():
-    #     val_dataloaders[k] = accelerator.prepare(v)
+    model, hypermod, emtmod, optimizer = accelerator.prepare(model, hypermod, emtmod, optimizer)
+    train_dataloader = accelerator.prepare(train_dataloader)
+    for k, v in val_dataloaders.items():
+        val_dataloaders[k] = accelerator.prepare(v)
     num_training_steps = args.epochs * len(train_dataloader)
     num_warmup_steps = args.warmup_frac * num_training_steps
     scheduler = get_scheduler(
@@ -204,7 +204,7 @@ def main(args):
         num_warmup_steps=int(num_warmup_steps / args.grad_accum_steps),
         num_training_steps=int(num_training_steps / args.grad_accum_steps),
     )
-    # scheduler = accelerator.prepare(scheduler)
+    scheduler = accelerator.prepare(scheduler)
     inp_dropout = getattr(peft_config, f"{peft_type.lower()}_dropout", 0.0)
 
     if use_explicit_emb_model:
@@ -215,7 +215,7 @@ def main(args):
         args,
         save_dir,
         inp_dropout,
-        # accelerator,
+        accelerator,
         model,
         layer_indices,
         hypermod,

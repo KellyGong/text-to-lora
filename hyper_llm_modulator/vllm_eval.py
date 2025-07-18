@@ -8,6 +8,7 @@ import vllm
 import torch
 from vllm.lora.request import LoRARequest
 from transformers import set_seed
+from transformers import AutoModelForCausalLM, PreTrainedModel, AutoTokenizer
 
 import fishfarm
 from fishfarm.models.vllm_model import VLLMModel
@@ -55,6 +56,7 @@ def eval_model(
     kwargs = dict(
         llm=vllm.LLM(
             model_dir,
+            trust_remote_code=True,
             seed=42,
             max_model_len=2**12,
             enable_lora=lora_dirs is not None,
@@ -94,9 +96,45 @@ def eval_model(
 
 
 @torch.no_grad()
+def eval_model_hf_load(
+    model,
+    tokenizer,
+    chat_template,
+    gpu_memory_utilization,
+    evaluator,
+    prefill_text=""
+):
+    # kwargs = dict(
+    #     llm=vllm.LLM(
+    #         model_dir,
+    #         trust_remote_code=True,
+    #         seed=42,
+    #         max_model_len=2**12,
+    #         enable_lora=lora_dirs is not None,
+    #         max_lora_rank=64,  # current verson of vllm only supports up to 64
+    #         gpu_memory_utilization=gpu_memory_utilization,
+    #     ),
+    #     sampling_params=vllm.SamplingParams(
+    #         temperature=0,
+    #         top_p=1,
+    #         max_tokens=2**9,
+    #         repetition_penalty=1.0,
+    #     ),
+    #     chat_template=chat_template,
+    #     prefill_text=prefill_text,
+    # )
+    # model = LoRAVLLMModel(**kwargs)
+    results = dict()
+    print("Evaluating base model")
+    results["base_model"] = evaluator.evaluate(model=model, tokenizer=tokenizer)
+    return results
+
+
+@torch.no_grad()
 def eval_qa(
-    model_dir: str,
+    model_dir: str | AutoModelForCausalLM,
     eval_fn: Callable,
+    tokenizer: Optional[AutoTokenizer] = None,
     lora_dirs: Optional[list[str]] = None,
     chat_template: Optional[str] = None,
     gpu_memory_utilization: float = 0.7,
@@ -127,15 +165,31 @@ def eval_qa(
         context_messages=[fishfarm.Message("system", system_message)],
     )
 
-    return eval_model(
-        model_dir,
-        lora_dirs,
-        chat_template,
-        gpu_memory_utilization,
-        evaluator,
-        prefill_text,
-        per_sample_lora,
-    )
+    if isinstance(model_dir, str):
+        return eval_model(
+            model_dir,
+            lora_dirs,
+            chat_template,
+            gpu_memory_utilization,
+            evaluator,
+            prefill_text,
+            per_sample_lora,
+        )
+    
+    elif isinstance(model_dir, PreTrainedModel):
+        # If model_dir is an PreTrainedModel instance, use eval_model_hf_load
+        # to handle the model evaluation.
+        return eval_model_hf_load(
+            model_dir,
+            tokenizer,
+            chat_template,
+            gpu_memory_utilization,
+            evaluator,
+            prefill_text
+        )
+
+    else:
+        raise ValueError("model_dir must be a string path or a PreTrainedModel instance")
 
 
 @torch.no_grad()
@@ -185,6 +239,7 @@ def eval_rouge(
 @torch.no_grad()
 def eval_gsm8k(
     model_dir,
+    tokenizer=None,
     lora_dirs: Optional[list[str]] = None,
     chat_template: Optional[str] = None,
     in_context_message: str = "",
@@ -217,15 +272,30 @@ def eval_gsm8k(
         languages=[],  # No need for language detection since the GSM8K task is purely in English.
     )
 
-    return eval_model(
-        model_dir,
-        lora_dirs,
-        chat_template,
-        gpu_memory_utilization,
-        evaluator,
-        prefill_text="Let's think step by step.",
-        per_sample_lora=per_sample_lora,
-    )
+    if isinstance(model_dir, str):
+        return eval_model(
+            model_dir,
+            lora_dirs,
+            chat_template,
+            gpu_memory_utilization,
+            evaluator,
+            prefill_text="Let's think step by step.",
+            per_sample_lora=per_sample_lora,
+        )
+        
+    elif isinstance(model_dir, PreTrainedModel):
+        # If model_dir is an PreTrainedModel instance, use eval_model_hf_load
+        # to handle the model evaluation.
+        return eval_model_hf_load(
+            model_dir,
+            chat_template,
+            gpu_memory_utilization,
+            evaluator,
+            prefill_text="Let's think step by step."
+        )
+
+    else:
+        raise ValueError("model_dir must be a string path or a PreTrainedModel instance")
 
 
 @torch.no_grad()
@@ -994,6 +1064,69 @@ def eval(
     eval_kwargs = dict(
         model_dir=model_dir,
         lora_dirs=lora_dirs,
+        chat_template=chat_template,
+        in_context_message=in_context_message,
+        gpu_memory_utilization=gpu_memory_utilization,
+        per_sample_lora=per_sample_lora,
+    )
+    if use_icl and task not in ["gsm8k", "humaneval", "mbpp"]:
+        # LLMs tend to copy the pattern in the in-context examples
+        # so we prefill "Answer:" pattern
+        eval_kwargs["prefill_text"] = "Answer:"
+
+    if (ds_kwargs is not None) and (task not in ["gsm8k", "humaneval", "mbpp"]):
+        eval_kwargs["dataset_kwargs"] = ds_kwargs
+
+    return EVAL_FNS[task](**eval_kwargs)
+
+
+@torch.no_grad()
+def eval_hf_model(
+    model,
+    tokenizer,
+    task,
+    chat_template,
+    gpu_memory_utilization=0.7,
+    ds_kwargs=None,
+    use_icl=False,
+    use_task_desc=False,
+    per_sample_lora=False,
+):
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
+    os.environ["FLASH_ATTENTION_DETERMINISTIC"] = "1"
+    torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    set_seed(42)
+    if task.startswith("lol"):
+        dataset_name = LOL_DATASET_NAMES[task]
+        return eval_rouge(
+            model,
+            tokenizer=tokenizer,
+            lora_dirs=None,
+            chat_template=chat_template,
+            gpu_memory_utilization=gpu_memory_utilization,
+            system_message="",
+            template=LOL_TEMPLATE,
+            dataset_name=dataset_name,
+            dataset_kwargs=dict(split="test"),
+            response_field="answer",
+            prefill_text="",
+            preprocessing_fn=get_preprocessing_fn(task),
+        )
+    in_context_message = ""
+    if use_icl and task in IN_CONTEXT_EXAMPLES:
+        in_context_message = IN_CONTEXT_EXAMPLES[task]
+    elif use_task_desc and task in TASK_DESCRIPTION_MESSAGES:
+        in_context_message = TASK_DESCRIPTION_MESSAGES[task]
+
+    eval_kwargs = dict(
+        model_dir=model,
+        tokenizer=tokenizer,
+        lora_dirs=None,
         chat_template=chat_template,
         in_context_message=in_context_message,
         gpu_memory_utilization=gpu_memory_utilization,

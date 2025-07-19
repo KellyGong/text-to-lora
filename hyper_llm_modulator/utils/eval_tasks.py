@@ -19,7 +19,8 @@ def get_accuracy(generated_text: str, target_text: str) -> int:
 
 
 def get_choice(txt: str) -> str:
-    txt = str(txt).strip().strip(":`'\"(.) ").lower()
+    # txt = str(txt).strip().strip(":`'\"(.) ").lower()
+    txt = str(txt).strip().strip(":`'\"(.) *").lower()
     CHOICES = [
         "a",
         "b",
@@ -131,6 +132,10 @@ def generate_from_hf_batch(
         "\n".join([f"{msg.role}: {msg.content}" for msg in req.messages]) + "\nassistant: "
         for req in requests
     ]
+
+    model.generation_config.temperature=None
+    model.generation_config.top_p=None
+    model.generation_config.top_k=None
     
     responses = []
     for i in tqdm(range(0, len(prompts), batch_size), desc="Generating"):
@@ -150,6 +155,7 @@ def generate_from_hf_batch(
             max_new_tokens=2**9,
             temperature=0,
             top_p=1,
+            # do_sample=False,
             **generate_kwargs
         )
         
@@ -204,7 +210,7 @@ class QATask(Task):
 
         sample_details = []
         for sample, result in zip(samples, results):
-            output = result.generation
+            output = result
             is_correct = self.eval_fn(output, sample.answer)
             details = dict(problem=sample.question, output=output, answer=sample.answer, is_correct=is_correct)
             sample_details.append(details)

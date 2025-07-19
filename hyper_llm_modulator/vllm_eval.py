@@ -126,6 +126,7 @@ def eval_model_hf_load(
     # model = LoRAVLLMModel(**kwargs)
     results = dict()
     print("Evaluating base model")
+
     results["base_model"] = evaluator.evaluate(model=model, tokenizer=tokenizer)
     return results
 

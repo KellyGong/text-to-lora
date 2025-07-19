@@ -34,7 +34,7 @@ BENCHMARK_TASK_INFO = {
     "boolq": {"split": "train[:500]"},
     "piqa": {"split": "train[:500]", "trust_remote_code": True},
     "arc_easy": {"name": "ARC-Easy", "split": "validation[:500]", "trust_remote_code": True},
-    "arc_challenge": {"name": "ARC-Challenge", "split": "validation[:500]", "trust_remote_code": True},
+    "arc_challenge": {"name": "ARC-Challenge", "split": "test", "trust_remote_code": True},
 }
 
 

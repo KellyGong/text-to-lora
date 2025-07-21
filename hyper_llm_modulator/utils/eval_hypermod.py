@@ -336,24 +336,6 @@ def eval_emt(args, emt_dir, curstep, full_eval=False, use_icl=False):
 
     wrap_model_with_emt(args_load, model, emtmod)
 
-    # base_dir = os.path.dirname(emt_dir)
-    # if "checkpoint" in base_dir:
-    #     base_dir = base_dir.split("checkpoint")[0]
-
-    # wrap_model_dir = os.path.join(base_dir, "model_wrap")
-
-    # model.save_pretrained(wrap_model_dir, safe_serialization=True, save_config=True)
-    
-    # tokenizer.save_pretrained(wrap_model_dir)
-    
-    # load_model = AutoModelForCausalLM.from_pretrained(
-    #     wrap_model_dir,
-    #     device_map="auto",
-    #     torch_dtype=torch.bfloat16,
-    #     trust_remote_code=True,
-    # )
-    # torch.save(model.state_dict(), wrap_model_dir)
-
     if not full_eval:
         eval_ds_info = {k: v for k, v in eval_ds_info.items() if k in BENCHMARK_TASK_INFO}
         for k in BENCHMARK_TASK_INFO:
@@ -361,6 +343,7 @@ def eval_emt(args, emt_dir, curstep, full_eval=False, use_icl=False):
 
     for eval_ds in eval_ds_info:
         ds_kwargs = eval_ds_info[eval_ds]["ds_kwargs"] if "ds_kwargs" in eval_ds_info[eval_ds] else None
+        print(f"Evaluating on {eval_ds} dataset with Split: {ds_kwargs['split']}")
         do_eval_task_emt(
             model,
             tokenizer,
@@ -459,7 +442,7 @@ def do_eval_task_emt(
         save_dicts = [dict() for _ in full_results]
 
     for (lora_dir, res), save_dict in zip(full_results.items(), save_dicts):
-        sampled_res_details = res.sample_details[:10]
+        sampled_res_details = res.sample_details[:]
         results[eval_dataset].append(
             dict(
                 results=preprocess_result(res, perf_keys),

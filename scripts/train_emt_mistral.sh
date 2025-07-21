@@ -1,4 +1,4 @@
-WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=1 python train_custom_sft.py \
+WANDB_MODE=disabled CUDA_VISIBLE_DEVICES=0 python train_custom_sft.py \
     configs/hyper_lora_decontam_lol_tasks.yaml \
     --model_dir=google/gemma-2-2b-it \
     --warmup_frac=0.2 --lr=2.5e-5 --n_tasks_per_batch=8 \

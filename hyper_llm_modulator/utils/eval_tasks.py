@@ -7,21 +7,7 @@ from fishfarm.tasks.base import Task, TaskResult
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 
-def get_accuracy(generated_text: str, target_text: str) -> int:
-    if str(generated_text).strip().strip(":`'\"(.) ").lower() == str(target_text).strip().strip(":`'\"(.) ").lower():
-        return 1
-    try:
-        if str(float(generated_text)) == str(target_text).strip():  # For example, "1.0" == "1"
-            return 1
-        return 0
-    except:
-        return 0
-
-
-def get_choice(txt: str) -> str:
-    # txt = str(txt).strip().strip(":`'\"(.) ").lower()
-    txt = str(txt).strip().strip(":`'\"(.) *").lower()
-    CHOICES = [
+CHOICES = [
         "a",
         "b",
         "c",
@@ -60,13 +46,34 @@ def get_choice(txt: str) -> str:
         "9",
         "10",
     ]
+
+
+def get_accuracy(generated_text: str, target_text: str) -> int:
+    if str(generated_text).strip().strip(":`'\"(.) ").lower() == str(target_text).strip().strip(":`'\"(.) ").lower():
+        return 1
+    try:
+        if str(float(generated_text)) == str(target_text).strip():  # For example, "1.0" == "1"
+            return 1
+        return 0
+    except:
+        return 0
+
+def get_choice2(txt: str) -> str:
+    filtered_txt = [c for c in txt if c in CHOICES]
+
+    return "".join(filtered_txt)
+
+
+def get_choice(txt: str) -> str:
+    # txt = str(txt).strip().strip(":`'\"(.) ").lower()
+    txt = str(txt).strip().strip(":`'\"(.) *").lower()
     for choice in CHOICES:
         if txt.startswith(choice):
             return choice
 
 
 def get_choice_accuracy(generated_text: str, target_text: str) -> int:
-    if get_choice(generated_text) == get_choice(target_text):
+    if get_choice2(generated_text) == get_choice2(target_text):
         return 1
     return 0
 
@@ -132,10 +139,6 @@ def generate_from_hf_batch(
         "\n".join([f"{msg.role}: {msg.content}" for msg in req.messages]) + "\nassistant: "
         for req in requests
     ]
-
-    model.generation_config.temperature=None
-    model.generation_config.top_p=None
-    model.generation_config.top_k=None
     
     responses = []
     for i in tqdm(range(0, len(prompts), batch_size), desc="Generating"):
@@ -153,9 +156,10 @@ def generate_from_hf_batch(
             **inputs,
             pad_token_id=tokenizer.pad_token_id,
             max_new_tokens=2**9,
-            temperature=0,
-            top_p=1,
-            # do_sample=False,
+            # temperature=1,
+            # top_p=1,
+            do_sample=False,
+            # no_repeat_ngram_size=2,
             **generate_kwargs
         )
         
@@ -210,12 +214,13 @@ class QATask(Task):
 
         sample_details = []
         for sample, result in zip(samples, results):
-            output = result
+            output = result if isinstance(model, PreTrainedModel) else result.generation
             is_correct = self.eval_fn(output, sample.answer)
             details = dict(problem=sample.question, output=output, answer=sample.answer, is_correct=is_correct)
             sample_details.append(details)
 
         agg_metrics = dict(acc=sum(sample["is_correct"] for sample in sample_details) / len(sample_details))
+        print(f'Accuracy: {agg_metrics}')
         return TaskResult(aggregate_metrics=agg_metrics, sample_details=sample_details)
 
 

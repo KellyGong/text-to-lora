@@ -104,29 +104,7 @@ def eval_model_hf_load(
     evaluator,
     prefill_text=""
 ):
-    # kwargs = dict(
-    #     llm=vllm.LLM(
-    #         model_dir,
-    #         trust_remote_code=True,
-    #         seed=42,
-    #         max_model_len=2**12,
-    #         enable_lora=lora_dirs is not None,
-    #         max_lora_rank=64,  # current verson of vllm only supports up to 64
-    #         gpu_memory_utilization=gpu_memory_utilization,
-    #     ),
-    #     sampling_params=vllm.SamplingParams(
-    #         temperature=0,
-    #         top_p=1,
-    #         max_tokens=2**9,
-    #         repetition_penalty=1.0,
-    #     ),
-    #     chat_template=chat_template,
-    #     prefill_text=prefill_text,
-    # )
-    # model = LoRAVLLMModel(**kwargs)
     results = dict()
-    print("Evaluating base model")
-
     results["base_model"] = evaluator.evaluate(model=model, tokenizer=tokenizer)
     return results
 
@@ -196,6 +174,7 @@ def eval_qa(
 @torch.no_grad()
 def eval_rouge(
     model_dir: str,
+    tokenizer: Optional[AutoTokenizer] = None,
     lora_dirs: Optional[list[str]] = None,
     chat_template: Optional[str] = None,
     gpu_memory_utilization: float = 0.7,
@@ -226,21 +205,39 @@ def eval_rouge(
         rouge_scorer_config=RougeScorerConfig(use_stemmer=True),
     )
 
-    return eval_model(
-        model_dir,
-        lora_dirs,
-        chat_template,
-        gpu_memory_utilization,
-        evaluator,
-        prefill_text,
-        per_sample_lora,
-    )
+    if isinstance(model_dir, str):
+        return eval_model(
+            model_dir,
+            lora_dirs,
+            chat_template,
+            gpu_memory_utilization,
+            evaluator,
+            prefill_text,
+            per_sample_lora
+        )
+
+    elif isinstance(model_dir, PreTrainedModel):
+        # If model_dir is an PreTrainedModel instance, use eval_model_hf_load
+        # to handle the model evaluation.
+        return eval_model_hf_load(
+            model_dir,
+            tokenizer,
+            chat_template,
+            gpu_memory_utilization,
+            evaluator,
+            prefill_text
+        )
+
+    else:
+        raise ValueError("model_dir must be a string path or a PreTrainedModel instance")
+
+    
 
 
 @torch.no_grad()
 def eval_gsm8k(
     model_dir,
-    tokenizer=None,
+    tokenizer: Optional[AutoTokenizer] = None,
     lora_dirs: Optional[list[str]] = None,
     chat_template: Optional[str] = None,
     in_context_message: str = "",
@@ -289,6 +286,7 @@ def eval_gsm8k(
         # to handle the model evaluation.
         return eval_model_hf_load(
             model_dir,
+            tokenizer,
             chat_template,
             gpu_memory_utilization,
             evaluator,
@@ -302,6 +300,7 @@ def eval_gsm8k(
 @torch.no_grad()
 def eval_coding(
     model_dir,
+    tokenizer: Optional[AutoTokenizer] = None,
     lora_dirs: Optional[list[str]] = None,
     chat_template: Optional[str] = None,
     in_context_message: str = "",
@@ -321,15 +320,29 @@ def eval_coding(
         source_dataset=source_dataset,
     )
 
-    return eval_model(
-        model_dir,
-        lora_dirs,
-        chat_template,
-        gpu_memory_utilization,
-        evaluator,
-        prefill_text="",
-        per_sample_lora=per_sample_lora,
-    )
+    if isinstance(model_dir, str):
+        return eval_model(
+            model_dir,
+            lora_dirs,
+            chat_template,
+            gpu_memory_utilization,
+            evaluator,
+            prefill_text="",
+            per_sample_lora=per_sample_lora,
+        )
+
+    elif isinstance(model_dir, PreTrainedModel):
+        return eval_model_hf_load(
+            model_dir,
+            tokenizer,
+            chat_template,
+            gpu_memory_utilization,
+            evaluator,
+            prefill_text=""
+        )
+
+    else:
+        raise ValueError("model_dir must be a string path or a PreTrainedModel instance")
 
 
 OQA_TEMPLATE = (
@@ -355,7 +368,9 @@ HSWAG_TEMPLATE = (
     "1: {endings[1]}\n"
     "2: {endings[2]}\n"
     "3: {endings[3]}\n\n"
-    "You must respond with the only number corresponding to the correct ending (0,1,2,3) for the passage "
+    # "You must respond with the only number corresponding to the correct ending (0,1,2,3) for the passage "
+    "You must respond with the only number corresponding to the correct ending for the passage from 0, 1, 2, 3 "
+    # "without any explanation."
     "without any explanation."
 )
 PIQA_TEMPLATE = (

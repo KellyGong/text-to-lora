@@ -83,10 +83,11 @@ def get_best_checkpoint(checkpoints):  # read saved perf csv
 def save_best_checkpoint(adapter_dir, best_checkpoint):
     if "hyper_lora" in best_checkpoint:
         shutil.copy(f"{best_checkpoint}/hypermod.pt", f"{adapter_dir}/hypermod.pt")
-    elif "mt_lora" in best_checkpoint:
-        shutil.copy(f"{best_checkpoint}/adapter_model.safetensors", f"{adapter_dir}/adapter_model.safetensors")
     elif "emt" in best_checkpoint:
         shutil.copy(f"{best_checkpoint}/emt.pt", f"{adapter_dir}/emt.pt")
+    elif "mt_lora" in best_checkpoint:
+        shutil.copy(f"{best_checkpoint}/adapter_model.safetensors", f"{adapter_dir}/adapter_model.safetensors")
+    
 
 
 def check_earlystop(adapter_dir, checkpoints, best_df_idx, best_checkpoint):
@@ -138,6 +139,7 @@ if __name__ == "__main__":
             
             elif "emt.pt" in file:
                 emt_dir = os.path.dirname(file)
+                print(f"evaluating model at {emt_dir}")
                 eval_emt(args, emt_dir, curstep, full_eval=False)
             
             # get the best checkpoint

@@ -28,12 +28,17 @@ DATA_DIR = "data"
 TRANSFORMED_DS_DIR = "data/transformed_datasets"
 EMBS_DIR = "data/embs"
 BENCHMARK_TASK_INFO = {
-    "openbookqa": {"split": "validation[:500]"},
-    "hellaswag": {"split": "train[:500]", "trust_remote_code": True},
-    "winogrande": {"name": "winogrande_debiased", "split": "train[:500]", "trust_remote_code": True},
-    "boolq": {"split": "train[:500]"},
-    "piqa": {"split": "train[:500]", "trust_remote_code": True},
-    "arc_easy": {"name": "ARC-Easy", "split": "validation[:500]", "trust_remote_code": True},
+    # "openbookqa": {"split": "validation[:500]"},
+    # "hellaswag": {"split": "train[:500]", "trust_remote_code": True},
+    # "winogrande": {"name": "winogrande_debiased", "split": "train[:500]", "trust_remote_code": True},
+    # "boolq": {"split": "train[:500]"},
+    # "piqa": {"split": "train[:500]", "trust_remote_code": True},
+    "openbookqa": {"split": "test"}, # 0.55 is fine
+    "hellaswag": {"split": "train[:500]", "trust_remote_code": True},  # TODO: answer has been parsed failed.
+    "winogrande": {"name": "winogrande_debiased", "split": "train[:500]", "trust_remote_code": True}, # TODO:
+    "boolq": {"split": "validation"},
+    "piqa": {"split": "train[:500]", "trust_remote_code": True}, # TODO:
+    "arc_easy": {"name": "ARC-Easy", "split": "test", "trust_remote_code": True},
     "arc_challenge": {"name": "ARC-Challenge", "split": "test", "trust_remote_code": True},
 }
 

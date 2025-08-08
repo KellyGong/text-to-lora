@@ -153,8 +153,13 @@ def generate_from_hf_batch(
             **inputs,
             pad_token_id=tokenizer.pad_token_id,
             max_new_tokens=2**9,
-            temperature=0,
-            top_p=1,
+            do_sample=False,
+            # num_beams=1,     
+            # temperature=1.0,         
+            # top_p=1.0,
+            # temperature=1,
+            # do_sample=True,
+            # top_p=1,
             # do_sample=False,
             **generate_kwargs
         )
